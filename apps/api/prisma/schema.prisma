@@ -1,0 +1,76 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Organization {
+  id         String              @id @default(uuid())
+  name       String
+  slug       String              @unique
+  createdAt  DateTime            @default(now()) @map("created_at")
+  updatedAt  DateTime            @updatedAt @map("updated_at")
+  users      User[]
+  products   Product[]
+  settings   OrgSettings?
+  movements  InventoryMovement[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  email          String       @unique
+  passwordHash   String       @map("password_hash")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("users")
+}
+
+model Product {
+  id                String              @id @default(uuid())
+  organizationId    String              @map("organization_id")
+  name              String
+  sku               String
+  description       String?
+  quantityOnHand    Int                 @default(0) @map("quantity_on_hand")
+  costPrice         Decimal?            @map("cost_price")
+  sellingPrice      Decimal?            @map("selling_price")
+  lowStockThreshold Int?                @map("low_stock_threshold")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  organization      Organization        @relation(fields: [organizationId], references: [id])
+  movements         InventoryMovement[]
+
+  @@unique([organizationId, sku])
+  @@map("products")
+}
+
+model InventoryMovement {
+  id             String       @id @default(uuid())
+  productId      String       @map("product_id")
+  organizationId String       @map("organization_id")
+  change         Int
+  note           String?
+  createdAt      DateTime     @default(now()) @map("created_at")
+  product        Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("inventory_movements")
+}
+
+model OrgSettings {
+  id                       String       @id @default(uuid())
+  organizationId           String       @unique @map("organization_id")
+  defaultLowStockThreshold Int          @default(5) @map("default_low_stock_threshold")
+  updatedAt                DateTime     @updatedAt @map("updated_at")
+  organization             Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("org_settings")
+}

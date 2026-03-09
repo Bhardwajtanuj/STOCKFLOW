@@ -1,0 +1,690 @@
+================================================================================
+STOCKFLOW — COMPLETE TECHNICAL SPECIFICATION PACKAGE
+Version: v1.0 MVP | Build Target: 6-Hour MVP
+================================================================================
+
+
+================================================================================
+SECTION 1 — PRODUCT REQUIREMENTS DOCUMENT (PRD)
+================================================================================
+
+1.1 PRODUCT OVERVIEW
+--------------------
+StockFlow is a multi-tenant SaaS inventory management application for small
+sellers and internal teams. Users can track products, monitor stock levels, and
+see low-stock alerts through a browser-based interface.
+
+  Product Name  : StockFlow MVP
+  Version       : v0.1 (6-Hour Build)
+  Target User   : Small sellers, internal teams, warehouse operators
+  Deployment    : Single-region, browser-based SaaS
+  Build Timeline: ~6 hours for MVP demo
+
+
+1.2 OBJECTIVES
+--------------
+- Allow users to sign up, create an organization, and log in securely
+- Provide full CRUD operations for product and inventory management
+- Display a real-time dashboard with summary metrics and low-stock alerts
+- Scope all data by organization to ensure multi-tenant isolation
+- Deliver a demo-ready app without external integrations
+
+
+1.3 IN-SCOPE FEATURES
+---------------------
+
+Authentication & Tenant Basics:
+  FR-1  : Email/password signup with organization name
+  FR-2  : Secure login with JWT or session-based auth
+  FR-3  : Organization record created and linked on signup
+  FR-4  : All data scoped by organization ID
+
+Product & Inventory Management:
+  FR-5  : Product model — ID, Org ID, Name, SKU, Description, Quantity,
+          Cost Price, Selling Price, Low Stock Threshold, timestamps
+  FR-6  : Create product via form
+  FR-7  : List products in a searchable table
+  FR-8  : Edit any product field including quantity
+  FR-9  : Delete product with confirmation dialog
+  FR-10 : Stock adjustment control (inline +/- N units)
+
+Dashboard:
+  FR-11 : Total product count card
+  FR-12 : Total units on hand card
+  FR-13 : Low-stock items table (Quantity <= Threshold)
+
+Settings:
+  FR-14 : Global default low-stock threshold setting
+
+
+1.4 OUT-OF-SCOPE (PHASE 1)
+--------------------------
+  Feature                          Reason
+  -------                          ------
+  Multi-warehouse                  Phase 2 — complex logistics
+  Product variants (size/color)    Phase 2 — data model complexity
+  Shopify / WooCommerce            Phase 3 — OAuth + webhooks needed
+  Order management                 Phase 2 — separate domain
+  Email notifications              Phase 2 — requires email service
+  CSV import/export                Phase 2 — file handling complexity
+  RBAC / multi-user orgs           Phase 2 — one user per org in MVP
+  Billing / subscriptions          Phase 3 — payment gateway needed
+  Audit logs                       Phase 2 — event sourcing overhead
+
+
+1.5 SUCCESS CRITERIA
+--------------------
+  1. A new user can sign up, log in, and see a populated dashboard
+  2. At least one product can be created with SKU, quantity, and pricing
+  3. Product appears correctly in list view and dashboard summary
+  4. Low-stock threshold logic triggers correctly and shows alert table
+  5. No cross-tenant data leaks between different organizations
+  6. Entire flow is demo-able in a browser without manual DB edits
+
+
+================================================================================
+SECTION 2 — SYSTEM OVERVIEW
+================================================================================
+
+2.1 APPLICATION CONTEXT
+-----------------------
+StockFlow is a three-tier web application:
+  - React/Next.js SPA (frontend)
+  - Node.js/Express REST API (backend)
+  - PostgreSQL relational database
+
+2.2 COMPONENT INTERACTION FLOW
+-------------------------------
+
+  +----------------------------------------------------------+
+  |                  BROWSER (React SPA)                     |
+  |  Login/Signup -- Dashboard -- Products -- Settings       |
+  +-------------------------+--------------------------------+
+                            | HTTPS / REST API
+                            v
+  +----------------------------------------------------------+
+  |            NODE.JS / EXPRESS API SERVER                  |
+  |  Auth Middleware -- Routes -- Controllers -- Prisma      |
+  +-------------------------+--------------------------------+
+                            | SQL (via Prisma ORM)
+                            v
+  +----------------------------------------------------------+
+  |                  POSTGRESQL DATABASE                     |
+  |  users -- organizations -- products -- settings          |
+  +----------------------------------------------------------+
+
+
+2.3 KEY DESIGN DECISIONS
+------------------------
+  Decision          Choice              Rationale
+  --------          ------              ---------
+  Auth method       JWT (stateless)     No server-side session store needed
+  ORM               Prisma              Type-safe, fast schema setup
+  Database          PostgreSQL          ACID-compliant, schema enforcement
+  Multi-tenancy     Org ID on every row Simple shared-DB, shared-schema
+  Frontend          Next.js + Tailwind  Fast dev, built-in routing
+
+
+================================================================================
+SECTION 3 — FUNCTIONAL REQUIREMENTS
+================================================================================
+
+3.1 AUTHENTICATION MODULE
+-------------------------
+  ID      Feature        Description                     Acceptance Criteria
+  ------  -------        -----------                     -------------------
+  FR-001  User Signup    Register with email, password,  Account created, JWT returned,
+                         org name                        org record linked
+  FR-002  User Login     Authenticate with email +       Valid JWT returned; invalid
+                         password                        credentials return 401
+  FR-003  Auth Guard     Protect all non-auth routes     Unauthenticated requests → 401
+  FR-004  Org Scoping    All queries filter by org ID    User cannot access other org data
+
+
+3.2 PRODUCT MANAGEMENT MODULE
+------------------------------
+  ID      Feature        Description                     Acceptance Criteria
+  ------  -------        -----------                     -------------------
+  FR-010  Create Product Form: Name, SKU, Qty, Cost,    Saved with org ID; SKU unique
+                         Price, Threshold                per org
+  FR-011  List Products  Paginated table with search     Filters Name or SKU
+  FR-012  Edit Product   Update any field via form       Changes persisted; updated_at
+                                                         refreshed
+  FR-013  Delete Product Hard delete with confirm dialog Confirm modal shown; removed
+  FR-014  Stock Adjust   Inline +/- N units control      Quantity updated; note recorded
+
+
+3.3 DASHBOARD MODULE
+--------------------
+  ID      Feature        Description                     Acceptance Criteria
+  ------  -------        -----------                     -------------------
+  FR-020  Total Products Count of all active products    Card shows correct count
+  FR-021  Total Units    Sum of all quantity_on_hand      Card shows correct sum
+  FR-022  Low Stock Table Products where qty <= threshold Uses product or global default (5)
+
+
+3.4 SETTINGS MODULE
+-------------------
+  ID      Feature          Description                   Acceptance Criteria
+  ------  -------          -----------                   -------------------
+  FR-030  Global Threshold Set default low-stock for org Saved value used when product
+                                                         threshold is null
+
+
+================================================================================
+SECTION 4 — DATABASE SCHEMA
+================================================================================
+
+4.1 ENTITY RELATIONSHIPS
+-------------------------
+  organizations  --<  users         (one org, one user in MVP)
+  organizations  --<  products      (one org, many products)
+  organizations  --<  org_settings  (one org, one settings record)
+
+
+4.2 TABLE: organizations
+------------------------
+  Column      Type          Constraints          Description
+  ------      ----          -----------          -----------
+  id          UUID          PK, default gen      Primary key (UUID v4)
+  name        VARCHAR(255)  NOT NULL             Organization display name
+  slug        VARCHAR(100)  UNIQUE, NOT NULL     URL-safe org identifier
+  created_at  TIMESTAMPTZ   DEFAULT NOW()        Record creation timestamp
+  updated_at  TIMESTAMPTZ   DEFAULT NOW()        Auto-updated on change
+
+
+4.3 TABLE: users
+----------------
+  Column          Type          Constraints     Description
+  ------          ----          -----------     -----------
+  id              UUID          PK              Primary key
+  organization_id UUID          FK → orgs.id    Owning organization
+  email           VARCHAR(255)  UNIQUE NOT NULL Login email address
+  password_hash   VARCHAR(255)  NOT NULL        bcrypt hashed password
+  created_at      TIMESTAMPTZ   DEFAULT NOW()   Registration timestamp
+  updated_at      TIMESTAMPTZ   DEFAULT NOW()   Last update timestamp
+
+
+4.4 TABLE: products
+-------------------
+  Column              Type           Constraints     Description
+  ------              ----           -----------     -----------
+  id                  UUID           PK              Primary key
+  organization_id     UUID           FK, NOT NULL    Scoping org reference
+  name                VARCHAR(255)   NOT NULL        Product display name
+  sku                 VARCHAR(100)   NOT NULL        Unique per org (see index)
+  description         TEXT           NULLABLE        Optional description
+  quantity_on_hand    INTEGER        NOT NULL, >=0   Current stock count
+  cost_price          DECIMAL(10,2)  NULLABLE        Purchase/cost price
+  selling_price       DECIMAL(10,2)  NULLABLE        Customer-facing price
+  low_stock_threshold INTEGER        NULLABLE        Per-product override
+  created_at          TIMESTAMPTZ    DEFAULT NOW()   Creation timestamp
+  updated_at          TIMESTAMPTZ    DEFAULT NOW()   Last update timestamp
+
+  Unique index: (organization_id, sku)
+
+
+4.5 TABLE: org_settings
+-----------------------
+  Column                       Type         Constraints    Description
+  ------                       ----         -----------    -----------
+  id                           UUID         PK             Primary key
+  organization_id              UUID         FK, UNIQUE     One row per org
+  default_low_stock_threshold  INTEGER      DEFAULT 5      Org-wide fallback
+  updated_at                   TIMESTAMPTZ  DEFAULT NOW()  Last settings update
+
+
+4.6 PRISMA SCHEMA
+-----------------
+
+  model Organization {
+    id         String       @id @default(uuid())
+    name       String
+    slug       String       @unique
+    createdAt  DateTime     @default(now()) @map("created_at")
+    updatedAt  DateTime     @updatedAt @map("updated_at")
+    users      User[]
+    products   Product[]
+    settings   OrgSettings?
+  }
+
+  model User {
+    id             String       @id @default(uuid())
+    organizationId String       @map("organization_id")
+    email          String       @unique
+    passwordHash   String       @map("password_hash")
+    createdAt      DateTime     @default(now())
+    updatedAt      DateTime     @updatedAt
+    organization   Organization @relation(fields: [organizationId], references: [id])
+  }
+
+  model Product {
+    id                String       @id @default(uuid())
+    organizationId    String       @map("organization_id")
+    name              String
+    sku               String
+    description       String?
+    quantityOnHand    Int          @default(0) @map("quantity_on_hand")
+    costPrice         Decimal?     @map("cost_price")
+    sellingPrice      Decimal?     @map("selling_price")
+    lowStockThreshold Int?         @map("low_stock_threshold")
+    createdAt         DateTime     @default(now())
+    updatedAt         DateTime     @updatedAt
+    organization      Organization @relation(fields: [organizationId], references: [id])
+    @@unique([organizationId, sku])
+  }
+
+  model OrgSettings {
+    id                       String       @id @default(uuid())
+    organizationId           String       @unique
+    defaultLowStockThreshold Int          @default(5)
+    updatedAt                DateTime     @updatedAt
+    organization             Organization @relation(fields: [organizationId], references: [id])
+  }
+
+
+================================================================================
+SECTION 5 — API SPECIFICATION
+================================================================================
+
+5.1 BASE URL & CONVENTIONS
+--------------------------
+  Base URL     : /api/v1
+  Auth Header  : Authorization: Bearer <jwt_token>
+  Content-Type : application/json
+  Error format : { error: string, details?: any }
+
+
+5.2 AUTH ENDPOINTS
+------------------
+  Method  Endpoint       Request Body                    Response
+  ------  --------       ------------                    --------
+  POST    /auth/signup   { email, password, orgName }    201: { token, user, organization }
+  POST    /auth/login    { email, password }             200: { token, user } | 401
+  GET     /auth/me       — (JWT required)                200: { user, organization }
+
+
+5.3 PRODUCT ENDPOINTS (JWT required)
+-------------------------------------
+  Method  Endpoint                      Request                        Response
+  ------  --------                      -------                        --------
+  GET     /products                     ?search=&page=&limit=          200: { products[], total, page }
+  GET     /products/:id                 —                              200: Product | 404
+  POST    /products                     ProductCreateDTO               201: Product | 409: SKU exists
+  PATCH   /products/:id                 ProductUpdateDTO (partial)     200: Updated Product
+  DELETE  /products/:id                 —                              204: No Content | 404
+  POST    /products/:id/adjust-stock    { adjustment, note? }          200: { product, newQuantity }
+
+
+5.4 DASHBOARD ENDPOINT (JWT required)
+--------------------------------------
+  Method  Endpoint             Request  Response
+  ------  --------             -------  --------
+  GET     /dashboard/summary   —        200: { totalProducts, totalUnits, lowStockItems[] }
+
+
+5.5 SETTINGS ENDPOINTS (JWT required)
+--------------------------------------
+  Method  Endpoint    Request                               Response
+  ------  --------    -------                               --------
+  GET     /settings   —                                     200: OrgSettings
+  PUT     /settings   { defaultLowStockThreshold: number }  200: Updated OrgSettings
+
+
+5.6 REQUEST / RESPONSE DTOs
+----------------------------
+
+  ProductCreateDTO:
+    name              : string   (required)
+    sku               : string   (required)
+    description       : string   (optional)
+    quantityOnHand    : number   (required, >= 0)
+    costPrice         : number   (optional)
+    sellingPrice      : number   (optional)
+    lowStockThreshold : number   (optional)
+
+  ProductUpdateDTO (all fields optional):
+    name, sku, description, quantityOnHand,
+    costPrice, sellingPrice, lowStockThreshold
+
+  StockAdjustDTO:
+    adjustment : number   (positive or negative integer)
+    note       : string   (optional)
+
+
+5.7 ERROR CODES
+---------------
+  HTTP  Error Key         When
+  ----  ---------         ----
+  400   VALIDATION_ERROR  Missing required fields or invalid format
+  401   UNAUTHORIZED      Missing or invalid JWT
+  403   FORBIDDEN         Accessing another org's resource
+  404   NOT_FOUND         Resource not found or not in this org
+  409   CONFLICT          SKU already exists in this organization
+  500   INTERNAL_ERROR    Unhandled server error
+
+
+================================================================================
+SECTION 6 — SECURITY REQUIREMENTS
+================================================================================
+
+6.1 AUTHENTICATION SECURITY
+----------------------------
+  Requirement      Implementation
+  -----------      --------------
+  Password hashing bcrypt with salt rounds >= 12; never store plaintext
+  JWT secrets      Min 256-bit random secret; stored in env variables
+  JWT expiry       Access tokens expire in 24 hours
+  HTTPS only       All production traffic over TLS
+  Input validation Zod validation on all API request bodies and params
+
+
+6.2 AUTHORIZATION & MULTI-TENANCY
+-----------------------------------
+  - Every API handler MUST extract organizationId from JWT, never from body
+  - All DB queries MUST include WHERE organization_id = :orgId
+  - Product IDs verified against requesting org — prevents ID enumeration
+  - Middleware enforces org scoping before reaching controller logic
+
+
+6.3 API SECURITY
+----------------
+  Control       Details
+  -------       -------
+  CORS          Restrict to known frontend origin (env-configured)
+  Rate limiting Basic rate limit on /auth routes (100 req / 15 min)
+  SQL injection Prisma ORM parameterizes all queries by default
+  XSS           React DOM escapes output; no dangerouslySetInnerHTML
+  Env secrets   DATABASE_URL, JWT_SECRET in .env; never commit to VCS
+
+
+================================================================================
+SECTION 7 — PERFORMANCE REQUIREMENTS
+================================================================================
+
+7.1 MVP PERFORMANCE TARGETS
+----------------------------
+  Metric                      Target    Notes
+  ------                      ------    -----
+  API response (list products) < 300ms  With up to 500 products per org
+  Dashboard load               < 500ms  Single aggregation query
+  Login / Signup               < 1000ms Includes bcrypt hash time
+  Page initial load (SPA)      < 2s     With code splitting
+  Concurrent users (MVP)       10–50    Single server, not load-tested
+
+
+7.2 DATABASE INDEXES
+---------------------
+  - INDEX on products(organization_id)          — all product queries filter by org
+  - INDEX on users(email)                       — login lookup
+  - UNIQUE INDEX on products(org_id, sku)       — conflict detection
+  - INDEX on org_settings(organization_id)      — settings lookup
+
+
+7.3 SCALABILITY NOTES (POST-MVP)
+---------------------------------
+  - Horizontal scaling  : PM2 cluster mode or multiple containers + load balancer
+  - DB connection pool  : PgBouncer or Prisma built-in pool
+  - Caching             : Redis for dashboard aggregation if data volume grows
+  - CDN                 : Serve Next.js static assets from Cloudflare / Vercel Edge
+
+
+================================================================================
+SECTION 8 — USER STORIES
+================================================================================
+
+8.1 AUTHENTICATION EPIC
+------------------------
+  ID      Story
+  ------  -----
+  US-001  As a new user, I want to sign up with email, password, and business
+          name so I can start tracking inventory.
+          Criteria: Account created; redirected to dashboard; org linked to user
+
+  US-002  As a returning user, I want to log in with email and password so I
+          can access my inventory.
+          Criteria: Successful login → dashboard; wrong password shows error
+
+  US-003  As a logged-in user, I want to be auto-redirected to login if my
+          session expires.
+          Criteria: Expired JWT triggers redirect to /login
+
+
+8.2 PRODUCT MANAGEMENT EPIC
+-----------------------------
+  ID      Story
+  ------  -----
+  US-010  As a user, I want to add a new product with name, SKU, and quantity
+          so I can begin tracking it.
+          Criteria: Product saved; appears in list; duplicate SKU shows error
+
+  US-011  As a user, I want to view all products in a table so I can see my
+          full inventory at a glance.
+          Criteria: Table shows Name, SKU, Qty, Price, Low Stock indicator
+
+  US-012  As a user, I want to search products by name or SKU so I can quickly
+          find specific items.
+          Criteria: Search field filters list in real time or on submit
+
+  US-013  As a user, I want to edit a product's details so I can keep
+          information up to date.
+          Criteria: All fields editable; changes saved; updated_at refreshes
+
+  US-014  As a user, I want to delete a product after confirming so I can
+          remove discontinued items.
+          Criteria: Confirm dialog shown; product removed on confirm
+
+  US-015  As a user, I want to adjust stock quantity with +/- N units and a
+          note so I can record stock changes.
+          Criteria: Quantity updated correctly; note stored; UI reflects new value
+
+
+8.3 DASHBOARD EPIC
+------------------
+  ID      Story
+  ------  -----
+  US-020  As a user, I want to see a summary of total products and units on
+          the dashboard.
+          Criteria: Cards show accurate counts; update when products change
+
+  US-021  As a user, I want to see which products are low on stock so I can
+          reorder them.
+          Criteria: Table shows items at or below threshold
+
+
+8.4 SETTINGS EPIC
+-----------------
+  ID      Story
+  ------  -----
+  US-030  As a user, I want to set a default low-stock threshold for my org so
+          products without a custom threshold use it.
+          Criteria: Setting saved; low-stock logic uses it for null-threshold products
+
+
+================================================================================
+SECTION 9 — UI/UX SPECIFICATION
+================================================================================
+
+9.1 DESIGN SYSTEM
+-----------------
+  Token        Value
+  -----        -----
+  Primary      #1E3A5F  Deep Navy (brand, headers, buttons)
+  Accent       #2E86AB  Steel Blue (links, active states)
+  Success      #27AE60  Green (in-stock indicator)
+  Warning      #E67E22  Orange (low-stock badge)
+  Danger       #E74C3C  Red (delete, out-of-stock)
+  Background   #F7F9FC  Off-white app background
+  Font         Inter (Google Fonts) — 14px base, weights 400/500/700
+  Border radius 6px cards, 4px buttons, 4px inputs
+  Spacing scale 4px base unit: 4, 8, 12, 16, 24, 32, 48px
+
+
+9.2 LAYOUT & NAVIGATION
+------------------------
+  - Sidebar navigation (fixed, 240px): Dashboard | Products | Settings | Logout
+  - Top bar shows org name and user email
+  - Main content area: scrollable, max-width 1200px, centered
+  - Mobile: sidebar collapses to hamburger menu (optional MVP)
+
+
+9.3 SCREEN SPECIFICATIONS
+--------------------------
+
+  SCREEN: Login / Signup
+    - Centered card, 420px wide
+    - Tab switcher: "Login" | "Sign Up"
+    - Signup fields: Org Name, Email, Password, Confirm Password
+    - Login fields: Email, Password
+    - Primary CTA button, full width
+    - Inline error messages below each field
+
+  SCREEN: Dashboard
+    - Three summary cards in a row:
+        Total Products | Total Units On Hand | Low Stock Count
+    - Cards: large number + label + icon
+    - Low Stock table: Name, SKU, Qty On Hand, Threshold
+    - Empty state: "No low-stock items — you're all good!"
+
+  SCREEN: Product List
+    - Header: "Products" + "Add Product" button (top right)
+    - Search input above table
+    - Columns: Name, SKU, Qty On Hand, Selling Price, Low Stock badge, Actions
+    - Low Stock badge: orange "Low" if qty <= threshold
+    - Actions: Edit icon, Delete icon (confirm dialog)
+    - Inline stock adjust: +/- control or "Adjust Stock" button
+
+  SCREEN: Create / Edit Product Form
+    - Slide-over panel or dedicated page
+    - Fields: Name*, SKU*, Description, Qty On Hand*, Cost Price,
+              Selling Price, Low Stock Threshold
+    - * = required fields
+    - Buttons: "Save Product" | "Cancel"
+    - SKU conflict shows inline error
+
+  SCREEN: Settings
+    - Single-card layout
+    - Field: "Default Low Stock Threshold" (number input)
+    - Help text: "Used for products without a custom threshold"
+    - Save button; success toast on save
+
+
+9.4 COMPONENT PATTERNS
+-----------------------
+  Component          Behavior
+  ---------          --------
+  Toast notifications Top-right, auto-dismiss 3s; green=success, red=error
+  Confirm dialog      Modal overlay; "Cancel" + "Delete" (red) buttons
+  Loading states      Skeleton loaders for table; spinner on submit button
+  Empty states        Centered message + CTA for empty tables
+  Form validation     Inline errors below inputs; validate on blur + submit
+
+
+================================================================================
+SECTION 10 — TECH STACK DOCUMENT
+================================================================================
+
+10.1 FULL STACK
+---------------
+  Layer        Technology              Version           Purpose
+  -----        ----------              -------           -------
+  Frontend     Next.js                 14.x App Router   SPA + SSR routing
+  UI Library   React                   18.x              Component model
+  Styling      Tailwind CSS            3.x               Utility-first CSS
+  State Mgmt   React Query (TanStack)  5.x               Server state, caching
+  Forms        React Hook Form + Zod   Latest            Validation, form state
+  Backend      Node.js + Express       Node 20 LTS       REST API server
+  Language     TypeScript              5.x               Type safety end-to-end
+  ORM          Prisma                  5.x               DB schema + queries
+  Database     PostgreSQL              16.x              Primary data store
+  Auth         jsonwebtoken + bcrypt   Latest            JWT + password hashing
+  Validation   Zod                     3.x               Shared schema validation
+
+
+10.2 DEVELOPMENT TOOLING
+-------------------------
+  Tool               Version / Config         Purpose
+  ----               ----------------         -------
+  Package manager    pnpm (preferred)         Fast installs, workspace support
+  Monorepo structure apps/web + apps/api      Frontend and backend in one repo
+  Linting            ESLint + Prettier        Code style enforcement
+  Git hooks          Husky + lint-staged      Pre-commit linting
+  Environment        .env + dotenv            Secrets management
+  DB migrations      prisma migrate dev       Schema versioning
+
+
+10.3 PROJECT STRUCTURE
+-----------------------
+
+  stockflow/
+  ├── apps/
+  │   ├── web/                    # Next.js frontend
+  │   │   ├── app/                # App Router pages
+  │   │   │   ├── (auth)/         # login, signup
+  │   │   │   ├── dashboard/
+  │   │   │   ├── products/
+  │   │   │   └── settings/
+  │   │   ├── components/         # Shared UI components
+  │   │   ├── hooks/              # React Query hooks
+  │   │   └── lib/                # API client, utils
+  │   └── api/                    # Express backend
+  │       ├── src/
+  │       │   ├── routes/         # auth, products, dashboard, settings
+  │       │   ├── controllers/
+  │       │   ├── middleware/     # auth, org-scope
+  │       │   ├── services/
+  │       │   └── prisma/         # schema.prisma + client
+  │       └── .env
+  ├── packages/
+  │   └── shared/                 # Shared Zod schemas, types
+  └── package.json
+
+
+10.4 ENVIRONMENT VARIABLES
+---------------------------
+  Variable               Description
+  --------               -----------
+  DATABASE_URL           postgresql://user:pass@localhost:5432/stockflow
+  JWT_SECRET             256-bit random secret for signing JWTs
+  JWT_EXPIRES_IN         Token expiry e.g. "24h"
+  CORS_ORIGIN            Frontend URL e.g. http://localhost:3000
+  PORT                   API server port (default: 4000)
+  NEXT_PUBLIC_API_URL    Backend URL for frontend API calls
+
+
+10.5 QUICK-START COMMANDS
+--------------------------
+
+  # 1. Install dependencies
+  pnpm install
+
+  # 2. Start PostgreSQL (Docker)
+  docker run -e POSTGRES_PASSWORD=secret -p 5432:5432 postgres:16
+
+  # 3. Run DB migrations
+  cd apps/api && npx prisma migrate dev --name init
+
+  # 4. Start API server (port 4000)
+  cd apps/api && pnpm dev
+
+  # 5. Start frontend (port 3000)
+  cd apps/web && pnpm dev
+
+  # 6. Open browser
+  open http://localhost:3000
+
+
+10.6 AI IDE PROMPTING CONTEXT
+------------------------------
+  Paste this as system context in Cursor / Copilot / Claude:
+
+  "TypeScript monorepo — Next.js 14 (App Router) frontend, Express API backend,
+  PostgreSQL via Prisma ORM. Auth: JWT in Authorization header. All API routes
+  require organizationId from JWT payload for multi-tenant scoping. Shared Zod
+  schemas in packages/shared/src/schemas. Use React Query for all data fetching.
+  React Hook Form + Zod for all forms. Tailwind CSS for styling."
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================

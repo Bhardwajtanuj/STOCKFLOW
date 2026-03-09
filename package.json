@@ -1,0 +1,16 @@
+{
+  "name": "stockflow-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace=@stockflow/api",
+    "dev:web": "npm run dev --workspace=@stockflow/web",
+    "build:api": "npm run build --workspace=@stockflow/api",
+    "build:web": "npm run build --workspace=@stockflow/web",
+    "build": "npm run build:api && npm run build:web",
+    "start:api": "npm run start --workspace=@stockflow/api"
+  }
+}
